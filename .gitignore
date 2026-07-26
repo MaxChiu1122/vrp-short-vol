@@ -17,3 +17,6 @@ build/
 .DS_Store
 .vscode/
 .idea/
+
+# Local build/pair-programming contract — not part of the published project.
+CLAUDE.md
