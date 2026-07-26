@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vrp"
+version = "0.1.0"
+description = "Short-volatility / variance-risk-premium distributional backtest on the mcpricer engine."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Max" }]
+dependencies = [
+  "numpy>=1.24",
+  # The pricing/Greeks engine (separate repo). For local co-development install it
+  # editable FIRST:  pip install -e ../mcpricer
+  # The git reference below lets an external clone resolve it standalone.
+  "mcpricer @ git+https://github.com/MaxChiu1122/Monte-Carlo_option_pricer.git",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+plot = ["matplotlib>=3.7"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vrp"]
+
+# The mcpricer dependency is a direct (git) reference; hatchling requires opting in.
+[tool.hatch.metadata]
+allow-direct-references = true
