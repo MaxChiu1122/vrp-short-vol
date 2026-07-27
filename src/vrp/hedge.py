@@ -1,11 +1,11 @@
 """The VRP core: one scenario's P&L of a delta-hedged short option.
 
 This is the piece that makes the strategy a *strategy* rather than a repricing.
-It is deliberately the one function YOU (Max) write and defend -- the harness,
-stats, and plots around it are wiring.
 """
 
 from __future__ import annotations
+
+import math
 
 import mcpricer as mc
 
@@ -23,31 +23,43 @@ def hedged_short_option_pnl(
 ) -> float:
     """P&L of SELLING one European call and delta-hedging it to expiry.
 
-    The whole point: you SELL and HEDGE at the IMPLIED vol (the premium you collect
-    and every delta you trade use ``sigma_implied``), but the underlying REALIZES
-    ``sigma_realized``. The two need not be equal -- and their gap is where the money
-    (or the loss) comes from.
+    You SELL and HEDGE at ``sigma_implied`` (the premium collected and every delta
+    traded use it), but the underlying REALIZES ``sigma_realized``. The gap is the
+    P&L: a delta-hedged short call earns the gamma-weighted vol spread
 
-    TODO(max): write the self-financing hedge for one path. Mirror the pure-Python
-    reference ``delta_hedge_pnl_python`` in mcpricer's tools/delta_hedge_backtest.py,
-    but SPLIT THE VOL:
-
-      * premium (t=0), initial delta, and every rebalance delta   -> use sigma_implied
-        via  mc.black_scholes_price / mc.black_scholes_delta(type=mc.OptionType.Call, ...)
-        with the *remaining* maturity tau at each step.
-      * the GBM path step  S *= exp((r - 1/2 sigma_realized^2) dt + sigma_realized*sqrt(dt)*Z)
-        -> use sigma_realized, with Z = rng.standard_normal().
-
-    Rebalance on steps 1..n_steps-1 (skip the final one -- it is a no-op at expiry and
-    calling black_scholes_delta at tau=0 divides by zero). Return the expiry P&L:
-        cash + delta * S_T - max(S_T - K, 0).
-
-    The mechanism you are demonstrating: a delta-hedged short call earns
         ~ 1/2 * sum_t S_t^2 * Gamma_t * (sigma_implied^2 - sigma_realized^2) * dt
-    -- the gamma-weighted vol spread. sigma_implied > sigma_realized  =>  positive
-    expected P&L (the variance risk premium); being short gamma, a realized-vol spike
-    is the tail risk.
+
+    so sigma_implied > sigma_realized gives a positive expected P&L (the variance
+    risk premium). Being short gamma, the distribution is left-skewed.
+
+    Rates and vols are annualized; ``T`` is in years. The path is simulated under
+    the risk-neutral drift ``r``, which makes E[P&L] exactly zero when the two vols
+    agree, for any ``n_steps``. Units: currency, same as ``S0``.
     """
-    raise NotImplementedError(
-        "Max writes the two-vol hedged short-call P&L for one path (see docstring)."
-    )
+    dt = T / n_steps
+
+    # t=0: collect the premium, then buy the initial hedge out of that cash.
+    # Both are quoted at sigma_implied -- it is all you can observe.
+    cash = mc.black_scholes_price(mc.OptionType.Call, S0, K, r, sigma_implied, T)
+    delta = mc.black_scholes_delta(mc.OptionType.Call, S0, K, r, sigma_implied, T)
+    cash -= delta * S0
+
+    S = S0
+    for i in range(1, n_steps + 1):
+        # The world moves at sigma_realized; we held the previous delta through it.
+        Z = rng.standard_normal()
+        S *= math.exp(
+            (r - 0.5 * sigma_realized**2) * dt + sigma_realized * math.sqrt(dt) * Z
+        )
+        cash *= math.exp(r * dt)  # self-financing: the cash leg earns the risk-free rate
+
+        # Rebalance at the *remaining* maturity, funded entirely from cash. Skipped at
+        # i == n_steps: tau = 0 divides by zero in d1, and we liquidate immediately anyway.
+        if i < n_steps:
+            tau = T - i * dt
+            new_delta = mc.black_scholes_delta(mc.OptionType.Call, S, K, r, sigma_implied, tau)
+            cash -= (new_delta - delta) * S
+            delta = new_delta
+
+    # Liquidate: cash + the shares we hold, less what we owe the option buyer.
+    return cash + delta * S - max(S - K, 0.0)
