@@ -16,18 +16,21 @@ from .stats import VrpResult, summarize_pnl
 DEFAULT_CONTRACT = dict(S0=100.0, K=100.0, r=0.02, T=1.0 / 12.0, n_steps=21)
 
 
-def vrp_backtest(
+def vrp_pnl_paths(
     *,
     sigma_implied: float,
     sigma_realized: float,
     n_paths: int = 50_000,
     seed: int = 0,
     **contract,
-) -> VrpResult:
-    """Backtest the delta-hedged short call over ``n_paths`` simulated markets.
+) -> np.ndarray:
+    """Per-path P&L of the delta-hedged short call over ``n_paths`` simulated markets.
 
     Sells at ``sigma_implied``; the underlying realizes ``sigma_realized``. Extra
     keyword args override DEFAULT_CONTRACT (S0, K, r, T, n_steps).
+
+    Returns the raw distribution rather than a summary -- plots need the array, and
+    summarizing is a separate concern (see ``vrp_backtest``).
     """
     cfg = {**DEFAULT_CONTRACT, **contract}
     rng = np.random.default_rng(seed)
@@ -36,7 +39,30 @@ def vrp_backtest(
         pnls[i] = hedged_short_option_pnl(
             sigma_implied=sigma_implied, sigma_realized=sigma_realized, rng=rng, **cfg
         )
-    return summarize_pnl(pnls)
+    return pnls
+
+
+def vrp_backtest(
+    *,
+    sigma_implied: float,
+    sigma_realized: float,
+    n_paths: int = 50_000,
+    seed: int = 0,
+    **contract,
+) -> VrpResult:
+    """Backtest the delta-hedged short call and summarize the P&L distribution.
+
+    Thin wrapper: ``summarize_pnl(vrp_pnl_paths(...))``. Same arguments.
+    """
+    return summarize_pnl(
+        vrp_pnl_paths(
+            sigma_implied=sigma_implied,
+            sigma_realized=sigma_realized,
+            n_paths=n_paths,
+            seed=seed,
+            **contract,
+        )
+    )
 
 
 def vrp_curve(
