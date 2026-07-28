@@ -16,8 +16,24 @@ import matplotlib
 matplotlib.use("Agg")  # headless: no display needed
 import matplotlib.pyplot as plt  # noqa: E402
 
-from vrp import DEFAULT_CONTRACT, summarize_pnl, vrp_curve, vrp_pnl_paths  # noqa: E402
-from vrp.plot import THEMES, plot_pnl_distribution, plot_vrp_curve  # noqa: E402
+from vrp import (  # noqa: E402
+    DEFAULT_CONTRACT,
+    HestonParams,
+    heston_pnl_paths,
+    summarize_pnl,
+    vrp_curve,
+    vrp_pnl_paths,
+)
+from vrp.plot import (  # noqa: E402
+    THEMES,
+    plot_pnl_distribution,
+    plot_stress_curve,
+    plot_vrp_curve,
+)
+
+# Vol-of-vol sweep for the Heston stress; expected variance is held fixed at
+# SIGMA_REALIZED**2 throughout, so only the violence of the vol moves.
+XI_GRID = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8)
 
 # The realistic contract: 1-month ATM call, 21 daily hedges, sold 4 vol points
 # above what the world goes on to realize.
@@ -54,8 +70,30 @@ def main() -> None:
     for spread, mean_pnl, sharpe in curve:
         print(f"  {spread * 100:+6.1f}        {mean_pnl:+8.4f}  {sharpe:+7.3f}")
 
+    # The Heston stress: same expected variance, rising vol-of-vol.
+    stress = []
+    print("\n  vol-of-vol   mean P&L    CVaR 5%    Sharpe   win     Feller")
+    for xi in XI_GRID:
+        heston = HestonParams.matched_to(SIGMA_REALIZED, xi=xi)
+        pnls = heston_pnl_paths(
+            sigma_implied=SIGMA_IMPLIED, heston=heston, n_paths=N_PATHS, seed=SEED
+        )
+        res = summarize_pnl(pnls)
+        stress.append((xi, res.mean_pnl, res.cvar_05))
+        print(
+            f"  {xi:>9.1f}   {res.mean_pnl:+8.4f}   {res.cvar_05:+8.4f}   "
+            f"{res.sharpe:6.3f}   {res.win_rate:5.1%}   "
+            f"{'ok' if heston.feller_satisfied else 'VIOLATED'}"
+        )
+
     for theme in ("light", "dark"):
         surface = THEMES[theme]["surface"]
+
+        axes = plot_stress_curve(stress, theme=theme)
+        out = FIGURES / f"heston_stress_{theme}.png"
+        axes[0].figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(axes[0].figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
 
         ax = plot_pnl_distribution(
             pnls,

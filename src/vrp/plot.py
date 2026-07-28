@@ -145,6 +145,71 @@ def plot_pnl_distribution(
     return ax
 
 
+def plot_stress_curve(stress, *, theme: str = "light", axes=None):
+    """Mean P&L and 5% CVaR against vol-of-vol -- the "what kills you" figure.
+
+    ``stress`` is a sequence of (xi, mean_pnl, cvar_05) from a Heston sweep with the
+    *expected* variance held fixed, so the only thing changing is how violently the
+    realized vol moves. The two panels tell opposite stories on purpose: the mean
+    barely reacts (and even drifts up), while the tail falls off a cliff. If you
+    monitor only the top panel you never see the risk arriving.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    xis = np.array([s[0] for s in stress])
+    means = np.array([s[1] for s in stress])
+    cvars = np.array([s[2] for s in stress])
+
+    if axes is None:
+        fig, axes = plt.subplots(2, 1, figsize=(7.5, 5.6), sharex=True)
+        fig.patch.set_facecolor(t["surface"])
+    ax_mean, ax_cvar = axes
+
+    ax_mean.axhline(0.0, color=t["axis"], lw=1.0, zorder=1)
+    ax_mean.plot(xis, means, "-", color=t["series"], lw=2.0, zorder=3)
+    ax_mean.plot(xis, means, "o", color=t["series"], ms=5.5, zorder=4)
+    ax_mean.set_ylabel("mean P&L per trade")
+    ax_mean.set_ylim(0.0, max(means) * 1.35)
+    ax_mean.annotate(
+        "the mean barely moves —\nit never warns you",
+        xy=(xis[len(xis) // 2], means[len(means) // 2]),
+        xytext=(0, 22),
+        textcoords="offset points",
+        color=t["ink_secondary"],
+        fontsize=9,
+        ha="center",
+    )
+
+    ax_cvar.axhline(0.0, color=t["axis"], lw=1.0, zorder=1)
+    ax_cvar.plot(xis, cvars, "-", color=t["critical"], lw=2.0, zorder=3)
+    ax_cvar.plot(xis, cvars, "o", color=t["critical"], ms=5.5, zorder=4)
+    ax_cvar.set_ylabel("CVaR 5% (the tail)")
+    ax_cvar.annotate(
+        f"CVaR {cvars[-1] / cvars[0]:.1f}× worse\nby ξ = {xis[-1]:g}",
+        xy=(0.97, 0.72),
+        xycoords="axes fraction",
+        color=t["critical"],
+        fontsize=9.5,
+        fontweight="bold",
+        ha="right",
+        va="top",
+    )
+
+    for ax in (ax_mean, ax_cvar):
+        _style_axes(ax, t)
+    ax_cvar.set_xlabel("Heston vol-of-vol  ξ   (expected variance held fixed)")
+    ax_mean.set_title(
+        "Stochastic realized vol: the mean survives, the tail does not",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    return axes
+
+
 def plot_vrp_curve(curve, *, theme: str = "light", axes=None):
     """Mean P&L and Sharpe vs the implied-minus-realized vol spread.
 
