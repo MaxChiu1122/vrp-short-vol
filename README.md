@@ -85,6 +85,57 @@ python scripts/make_figures.py
 > that the premium exists in real markets. (It does: S&P implied has run ~2–4 vol points above
 > subsequent realized for decades. This repo assumes that, it doesn't demonstrate it.)
 
+## What it costs to run
+
+Everything above is **gross**. Delta-hedging means trading the underlying 21 times a month, and
+every one of those trades crosses a spread. `cost_bps` charges a proportional cost on the notional
+traded, on the initial hedge and every rebalance (expiry is assumed to settle, not trade out).
+
+That turns rebalancing frequency from a free parameter into a real decision, because the two sides
+scale differently:
+
+- **Hedging risk falls like `1/√n`.** With continuous hedging a positive vol spread wins on *every*
+  path, so all of the dispersion — and the entire left tail — is discretization error.
+- **Turnover grows like `√n`.** Each rebalance trades `~ Γ·S·σ·√dt` shares, so `n` of them turn
+  over `√n` of notional.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/hedge_frequency_dark.png">
+  <img alt="Two stacked panels against rebalances per day on a log axis. Top: Sharpe per trade. The zero-cost and 1bp curves rise monotonically to about 2.7. The 5bp curve peaks at 1.57 around 12 rebalances per day then falls. The 10bp curve peaks at 0.84 around 2 per day and collapses to -2.2 by 24 per day. Bottom: mean P&L, flat near +0.46 at zero cost but falling to -0.23 at 10bp and 24 rebalances per day." src="docs/hedge_frequency_light.png">
+</picture>
+
+| cost | Sharpe @ daily | mean @ daily | best frequency | Sharpe there |
+|---|---|---|---|---|
+| none | 1.238 | +0.4646 | (no optimum) | rises to 2.73 |
+| 1 bp | 1.192 | +0.4466 | (no optimum) | rises to 2.60 |
+| 5 bp | 1.003 | +0.3749 | **12×/day** | 1.566 |
+| 10 bp | 0.765 | +0.2853 | **2×/day** | 0.836 |
+
+**At zero cost, hedge as often as you can — the curve never turns.** Add cost and each curve peaks,
+and the peak moves *left* as cost rises. Past it you pay away more in spread than you remove in
+gamma risk: at 10 bp and 24 rebalances a day the strategy loses money outright (−0.23 a trade,
+Sharpe −2.2). The exponent is asserted in the tests — cost drag scales as `√n` to within 20% once
+the fixed initial-hedge cost is removed.
+
+Practically: **the underlying decides the strategy.** At index-futures costs (~1 bp) the edge is
+essentially intact and frequency barely matters. At single-name costs (5–10 bp) there is a sharp
+optimum, and 5 bp already eats ~20% of the edge at daily hedging.
+
+> On annualizing: the Sharpes here are **per trade** on a 1-month contract, so ×√12 to annualize —
+> the gross 1.24 becomes ~4.3, which no real short-vol book earns. That gap is the honest measure of
+> what this model still omits: no bid-ask on the *option* itself, no skew, no margin or financing,
+> and a realized vol that is assumed rather than measured. Costs on the hedge are one line item,
+> not all of them.
+
+Costs run on the `"python"` backend only. Asking the C++ path for them raises rather than silently
+handing back a gross number.
+
+```python
+from vrp import vrp_backtest, hedge_frequency_sweep
+vrp_backtest(sigma_implied=0.20, sigma_realized=0.16, cost_bps=5.0)
+hedge_frequency_sweep(n_steps_grid=(21, 42, 84), cost_bps_grid=(0.0, 5.0))
+```
+
 ## The stress: what actually kills the book
 
 Constant realized vol is a convenient fiction. Real vol clusters, spikes, and spikes *while the
@@ -189,6 +240,9 @@ notebooks/       # analysis write-ups
 - [x] Heston-realized stress: the tail fattens 4× while the mean holds.
 - [x] Speed: the per-path core moved into the `mcpricer` C++ engine (implied ≠ realized
       generalization of its delta-hedge) — **75×**, 5.4M paths/s.
+- [x] Transaction costs + the rebalancing-frequency trade-off — an interior optimum that
+      moves with cost.
 
-Next: replace the assumed `sigma_realized` with a **block bootstrap of real returns**, and use
+Next, in order: a **moneyness/skew sweep** (sell a 25-delta call rather than ATM), and then
+replacing the assumed `sigma_realized` with a **block bootstrap of real returns**, using
 VIX-vs-realized to show the premium is a measured fact rather than a parameter.

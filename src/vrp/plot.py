@@ -145,6 +145,96 @@ def plot_pnl_distribution(
     return ax
 
 
+# Cost is an ORDERED quantity, so the cost levels take a one-hue sequential ramp
+# (light -> dark as cost rises), not categorical hues. Both directions validate as
+# ordinal ramps against their own surface.
+COST_RAMP = {
+    "light": ["#86b6ef", "#5598e7", "#2a78d6", "#184f95"],
+    "dark": ["#184f95", "#2a78d6", "#5598e7", "#86b6ef"],
+}
+
+
+def plot_frequency_sweep(sweep, *, steps_per_day: float, theme: str = "light", axes=None):
+    """Sharpe and mean P&L against rebalancing frequency, one line per cost level.
+
+    ``sweep`` is the ``(n_steps, cost_bps, VrpResult)`` list from
+    ``vrp.hedge_frequency_sweep``. ``steps_per_day`` converts n_steps into
+    rebalances per day so the x axis means something to a trader.
+
+    The shape is the point. At zero cost Sharpe rises without bound -- hedging error
+    is the only risk and it falls like 1/sqrt(n). Add cost and turnover (~sqrt(n))
+    starts winning: each curve peaks and then falls, and the peak moves LEFT as cost
+    rises. Past that peak you are paying away more spread than you remove in gamma.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    ramp = COST_RAMP[theme]
+
+    costs = sorted({c for _n, c, _r in sweep})
+    if len(costs) > len(ramp):
+        raise ValueError(f"the cost ramp has {len(ramp)} steps, got {len(costs)} cost levels")
+
+    if axes is None:
+        fig, axes = plt.subplots(
+            2, 1, figsize=(7.5, 6.2), sharex=True, gridspec_kw=dict(height_ratios=[1.3, 1])
+        )
+        fig.patch.set_facecolor(t["surface"])
+    ax_sharpe, ax_mean = axes
+
+    for color, cost in zip(ramp, costs):
+        rows = sorted((n, r) for n, c, r in sweep if c == cost)
+        x = np.array([n / steps_per_day for n, _r in rows])
+        sharpes = np.array([r.sharpe for _n, r in rows])
+        means = np.array([r.mean_pnl for _n, r in rows])
+
+        label = "no cost" if cost == 0 else f"{cost:g} bp"
+        ax_sharpe.plot(x, sharpes, "-o", color=color, lw=2.0, ms=5.0, label=label, zorder=3)
+        ax_mean.plot(x, means, "-o", color=color, lw=2.0, ms=5.0, zorder=3)
+
+        # Mark the Sharpe-maximizing frequency when the peak is interior.
+        best = int(np.argmax(sharpes))
+        if 0 < best < len(x) - 1:
+            ax_sharpe.plot(
+                x[best], sharpes[best], "o", ms=13, mfc="none", mec=t["critical"], mew=2.0, zorder=5
+            )
+            ax_sharpe.annotate(
+                f"peak {x[best]:.0f}×/day",
+                xy=(x[best], sharpes[best]),
+                xytext=(0, 14),
+                textcoords="offset points",
+                color=t["critical"],
+                fontsize=9,
+                fontweight="bold",
+                ha="center",
+            )
+
+    for ax in (ax_sharpe, ax_mean):
+        ax.axhline(0.0, color=t["axis"], lw=1.0, zorder=1)
+        ax.set_xscale("log")
+        _style_axes(ax, t)
+
+    ax_sharpe.set_ylabel("Sharpe (per trade)")
+    ax_mean.set_ylabel("mean P&L per trade")
+    ax_mean.set_xlabel("rebalances per day  (log scale)")
+    leg = ax_sharpe.legend(
+        title="transaction cost", loc="upper left", frameon=False, fontsize=9, ncol=2
+    )
+    leg.get_title().set_color(t["ink_secondary"])
+    leg.get_title().set_fontsize(9)
+    for text in leg.get_texts():
+        text.set_color(t["ink_secondary"])
+    ax_sharpe.set_title(
+        "Hedging more is only free if trading is",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    return axes
+
+
 def plot_stress_curve(stress, *, theme: str = "light", axes=None):
     """Mean P&L and 5% CVaR against vol-of-vol -- the "what kills you" figure.
 

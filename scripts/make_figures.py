@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from vrp import (  # noqa: E402
     DEFAULT_CONTRACT,
     HestonParams,
+    hedge_frequency_sweep,
     heston_pnl_paths,
     summarize_pnl,
     vrp_curve,
@@ -26,10 +27,17 @@ from vrp import (  # noqa: E402
 )
 from vrp.plot import (  # noqa: E402
     THEMES,
+    plot_frequency_sweep,
     plot_pnl_distribution,
     plot_stress_curve,
     plot_vrp_curve,
 )
+
+# Rebalancing-frequency sweep. T = 1/12 year is ~21 trading days, so n_steps=21 is
+# once a day; the grid spans roughly twice-weekly to ~24x a day.
+STEPS_PER_DAY = 21.0
+N_STEPS_GRID = (4, 7, 11, 21, 42, 63, 126, 252, 504)
+COST_BPS_GRID = (0.0, 1.0, 5.0, 10.0)
 
 # Vol-of-vol sweep for the Heston stress; expected variance is held fixed at
 # SIGMA_REALIZED**2 throughout, so only the violence of the vol moves.
@@ -86,8 +94,31 @@ def main() -> None:
             f"{'ok' if heston.feller_satisfied else 'VIOLATED'}"
         )
 
+    # Rebalancing frequency vs transaction cost.
+    print("\n  rebal/day   " + "".join(f"{c:g}bp Sharpe   " for c in COST_BPS_GRID))
+    sweep = hedge_frequency_sweep(
+        n_steps_grid=N_STEPS_GRID,
+        cost_bps_grid=COST_BPS_GRID,
+        sigma_implied=SIGMA_IMPLIED,
+        sigma_realized=SIGMA_REALIZED,
+        n_paths=20_000,
+        seed=SEED,
+    )
+    for n_steps in N_STEPS_GRID:
+        row = f"  {n_steps / STEPS_PER_DAY:>9.2f}   "
+        for cost in COST_BPS_GRID:
+            res = next(r for n, c, r in sweep if n == n_steps and c == cost)
+            row += f"{res.sharpe:>11.3f}   "
+        print(row)
+
     for theme in ("light", "dark"):
         surface = THEMES[theme]["surface"]
+
+        axes = plot_frequency_sweep(sweep, steps_per_day=STEPS_PER_DAY, theme=theme)
+        out = FIGURES / f"hedge_frequency_{theme}.png"
+        axes[0].figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(axes[0].figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
 
         axes = plot_stress_curve(stress, theme=theme)
         out = FIGURES / f"heston_stress_{theme}.png"

@@ -20,6 +20,7 @@ def hedged_short_option_pnl(
     T: float,
     n_steps: int,
     rng,  # numpy.random.Generator
+    cost_bps: float = 0.0,
 ) -> float:
     """P&L of SELLING one European call and delta-hedging it to expiry.
 
@@ -32,17 +33,32 @@ def hedged_short_option_pnl(
     so sigma_implied > sigma_realized gives a positive expected P&L (the variance
     risk premium). Being short gamma, the distribution is left-skewed.
 
+    ``cost_bps`` charges a proportional transaction cost, in basis points of the
+    notional traded, on every share bought or sold: ``cost * |d_delta| * S``. It is
+    the half-spread plus fees you actually pay to move the hedge. Costs are charged
+    on the INITIAL hedge and on every rebalance; the expiry unwind is assumed
+    costless (the position settles at expiry rather than being traded out).
+
+    Note the scaling, which is why hedging more is not simply better. Each
+    rebalance trades ~ Gamma * |dS| ~ Gamma * S * sigma * sqrt(dt) shares, so total
+    turnover over n_steps rebalances grows like sqrt(n_steps) while the
+    discrete-hedging risk falls like 1/sqrt(n_steps). Cost and risk move in
+    opposite directions and there is an interior optimum.
+
     Rates and vols are annualized; ``T`` is in years. The path is simulated under
     the risk-neutral drift ``r``, which makes E[P&L] exactly zero when the two vols
-    agree, for any ``n_steps``. Units: currency, same as ``S0``.
+    agree and ``cost_bps`` is zero, for any ``n_steps``. Units: currency, same as
+    ``S0``.
     """
     dt = T / n_steps
+    cost_rate = cost_bps * 1e-4
 
     # t=0: collect the premium, then buy the initial hedge out of that cash.
     # Both are quoted at sigma_implied -- it is all you can observe.
     cash = mc.black_scholes_price(mc.OptionType.Call, S0, K, r, sigma_implied, T)
     delta = mc.black_scholes_delta(mc.OptionType.Call, S0, K, r, sigma_implied, T)
     cash -= delta * S0
+    cash -= cost_rate * abs(delta) * S0  # you pay to put the hedge on
 
     S = S0
     for i in range(1, n_steps + 1):
@@ -58,7 +74,9 @@ def hedged_short_option_pnl(
         if i < n_steps:
             tau = T - i * dt
             new_delta = mc.black_scholes_delta(mc.OptionType.Call, S, K, r, sigma_implied, tau)
-            cash -= (new_delta - delta) * S
+            traded = new_delta - delta
+            cash -= traded * S
+            cash -= cost_rate * abs(traded) * S  # cost is on the notional traded
             delta = new_delta
 
     # Liquidate: cash + the shares we hold, less what we owe the option buyer.
