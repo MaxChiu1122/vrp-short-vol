@@ -25,14 +25,17 @@ from vrp import (  # noqa: E402
     vrp_curve,
     vrp_pnl_paths,
 )
+from vrp import bootstrap_pnl_paths, measure_vrp  # noqa: E402
 from vrp.moneyness import TYPICAL_EQUITY_SKEW, moneyness_sweep  # noqa: E402
 from vrp.plot import (  # noqa: E402
     THEMES,
     plot_frequency_sweep,
     plot_moneyness_sweep,
     plot_pnl_distribution,
+    plot_return_shape_comparison,
     plot_stress_curve,
     plot_vrp_curve,
+    plot_vrp_history,
 )
 
 # Strike ladder, quoted by delta the way a desk would.
@@ -65,13 +68,13 @@ def main() -> None:
     print(f"contract: {DEFAULT_CONTRACT}")
     print(f"selling {SIGMA_IMPLIED:.0%} vol into {SIGMA_REALIZED:.0%} realized, {N_PATHS:,} paths")
 
-    pnls = vrp_pnl_paths(
+    gbm_pnls = vrp_pnl_paths(
         sigma_implied=SIGMA_IMPLIED,
         sigma_realized=SIGMA_REALIZED,
         n_paths=N_PATHS,
         seed=SEED,
     )
-    print(f"  {summarize_pnl(pnls)}")
+    print(f"  {summarize_pnl(gbm_pnls)}")
 
     curve = vrp_curve(
         spreads=[-0.04, -0.03, -0.02, -0.01, 0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0.06],
@@ -88,10 +91,10 @@ def main() -> None:
     print("\n  vol-of-vol   mean P&L    CVaR 5%    Sharpe   win     Feller")
     for xi in XI_GRID:
         heston = HestonParams.matched_to(SIGMA_REALIZED, xi=xi)
-        pnls = heston_pnl_paths(
+        stress_pnls = heston_pnl_paths(
             sigma_implied=SIGMA_IMPLIED, heston=heston, n_paths=N_PATHS, seed=SEED
         )
-        res = summarize_pnl(pnls)
+        res = summarize_pnl(stress_pnls)
         stress.append((xi, res.mean_pnl, res.cvar_05))
         print(
             f"  {xi:>9.1f}   {res.mean_pnl:+8.4f}   {res.cvar_05:+8.4f}   "
@@ -140,8 +143,39 @@ def main() -> None:
             f"        {s_s:>6.3f} {r_s.mean_pnl:>+7.4f} {r_s.sharpe:>6.3f}"
         )
 
+    # Real data: the measured premium, and real return shapes through the hedge.
+    measurement = measure_vrp()
+    print(f"\n  measured VRP: {measurement}")
+
+    real_series = [("GBM (Gaussian)", gbm_pnls)]
+    for block, label in ((1, "real returns, IID"), (5, "real returns, block=5")):
+        real_series.append((
+            label,
+            bootstrap_pnl_paths(
+                sigma_implied=SIGMA_IMPLIED,
+                sigma_realized=SIGMA_REALIZED,
+                n_paths=N_PATHS,
+                seed=SEED,
+                block=block,
+            ),
+        ))
+    for label, p in real_series:
+        print(f"  {label:<24} {summarize_pnl(p)}")
+
     for theme in ("light", "dark"):
         surface = THEMES[theme]["surface"]
+
+        ax = plot_vrp_history(measurement, theme=theme)
+        out = FIGURES / f"vrp_history_{theme}.png"
+        ax.figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(ax.figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
+
+        ax = plot_return_shape_comparison(real_series, theme=theme)
+        out = FIGURES / f"return_shape_{theme}.png"
+        ax.figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(ax.figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
 
         axes = plot_moneyness_sweep(money_flat, money_skew, theme=theme)
         out = FIGURES / f"moneyness_{theme}.png"
@@ -162,7 +196,7 @@ def main() -> None:
         print(f"  wrote {out.relative_to(FIGURES.parent)}")
 
         ax = plot_pnl_distribution(
-            pnls,
+            gbm_pnls,
             title=f"Short-vol P&L: sell {SIGMA_IMPLIED:.0%} vol, realize {SIGMA_REALIZED:.0%}",
             theme=theme,
         )

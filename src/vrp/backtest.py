@@ -155,6 +155,58 @@ def vrp_curve(
     return out
 
 
+def bootstrap_pnl_paths(
+    *,
+    sigma_implied: float,
+    sigma_realized: float,
+    n_paths: int = 20_000,
+    seed: int = 0,
+    block: int = 1,
+    cost_bps: float = 0.0,
+    since: str | None = None,
+    **contract,
+) -> np.ndarray:
+    """Per-path P&L with the market path resampled from REAL S&P 500 returns.
+
+    Same hedge, same option, same implied vol -- only the return-generating process
+    changes, from Gaussian to a bootstrap of actual daily history. ``sigma_realized``
+    is still honoured as the *level*: the resampled returns are rescaled to it, so
+    this differs from ``vrp_pnl_paths`` in the SHAPE of the returns (fat tails, and
+    with ``block > 1`` volatility clustering) and nothing else.
+
+    ``block=1`` is an IID bootstrap; ``block=5`` keeps a week of consecutive real
+    days together. ``since`` trims the history (e.g. ``"2000-01-01"``).
+    """
+    from .bootstrap import bootstrap_log_returns, historical_daily_returns
+
+    cfg = {**DEFAULT_CONTRACT, **contract}
+    dt = cfg["T"] / cfg["n_steps"]
+    rng = np.random.default_rng(seed)
+
+    paths = bootstrap_log_returns(
+        historical_daily_returns(since=since),
+        n_paths=n_paths,
+        n_steps=cfg["n_steps"],
+        rng=rng,
+        block=block,
+        target_vol=sigma_realized,
+        r=cfg["r"],
+        dt=dt,
+    )
+
+    pnls = np.empty(n_paths, dtype=float)
+    for i in range(n_paths):
+        pnls[i] = hedged_short_option_pnl(
+            sigma_implied=sigma_implied,
+            sigma_realized=sigma_realized,
+            rng=rng,
+            cost_bps=cost_bps,
+            log_returns=paths[i],
+            **cfg,
+        )
+    return pnls
+
+
 def hedge_frequency_sweep(
     *,
     n_steps_grid,

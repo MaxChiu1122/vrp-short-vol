@@ -80,10 +80,79 @@ Both figures regenerate from a seeded run:
 python scripts/make_figures.py
 ```
 
-> Note on scope: `sigma_realized` here is a **model input, not a measurement**. These results
-> establish the *mechanics* of harvesting the premium and the shape of its risk — not evidence
-> that the premium exists in real markets. (It does: S&P implied has run ~2–4 vol points above
-> subsequent realized for decades. This repo assumes that, it doesn't demonstrate it.)
+Everything to this point takes `sigma_realized` as an input, which is the right way to study the
+mechanics but leaves the premium assumed. The next two sections stop assuming it.
+
+## Does the premium actually exist?
+
+VIX is the market's 30-day implied vol on the S&P 500. The realized vol of the *following* month is
+what actually happened. Their difference is the variance risk premium, observed rather than posited
+— 9,189 overlapping daily observations, 1990 to today, from the vendored
+`data/spx_vix_daily.csv`.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/vrp_history_dark.png">
+  <img alt="VIX minus subsequent 21-day realized volatility, daily from 1990 to 2026, in vol points. Mostly positive, filling blue above zero around a mean of +4.1, with sharp red negative spikes at 1998, 2008, 2010, 2018, and a spike to -72 in early 2020." src="docs/vrp_history_light.png">
+</picture>
+
+| period | mean spread | positive |
+|---|---|---|
+| 1990–2000 | +5.44 vp | 92.4% |
+| 2000–2010 | +3.35 vp | 81.5% |
+| 2010–2020 | +3.68 vp | 84.3% |
+| 2020–2026 | +3.80 vp | 84.5% |
+| **full sample** | **+4.10 vp** | **85.8%** |
+
+**Yes — and the 4-vol-point spread this repo assumes is almost exactly the historical mean.** That
+was a guess when the contract was written; it turns out to be +4.10.
+
+The red spikes are the whole risk in one picture. The worst days to have sold vol are all mid-February
+2020: VIX was 14–15, and the following month realized **87%** — a −72 vol-point spread. No amount of
+being right for thirty years covers that month if you are sized wrong.
+
+Note these are **overlapping** windows, so the observations are far from independent — good for
+seeing the shape and the episodes, not a basis for a t-statistic.
+
+## Does it matter that returns aren't Gaussian?
+
+The GBM backtest assumes independent normal returns. Real equity returns are neither:
+
+| | S&P 500 daily | Gaussian |
+|---|---|---|
+| excess kurtosis | **10.86** | 0 |
+| autocorrelation of \|return\|, lag 1 | **0.274** | 0 |
+
+So `bootstrap_pnl_paths` resamples the actual daily history instead of drawing normals — `block=1`
+for an IID bootstrap (fat tails, no clustering), `block=k` for a moving-block bootstrap (runs of `k`
+consecutive real days, so clustering survives). Sampled returns are standardized on the
+**historical population** moments and rescaled to the same `sigma_realized`, so the vol *level* is
+held fixed and only the *shape* changes. Standardizing per path would force every path to the same
+realized vol and destroy the very thing being measured.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/return_shape_dark.png">
+  <img alt="Three overlaid P&L histograms on a logarithmic count axis. The Gaussian distribution's left tail stops near -2.3. The IID and block bootstrap distributions extend past -8, with far more mass in the loss region. CVaR markers at -0.26, -1.64 and -2.01." src="docs/return_shape_light.png">
+</picture>
+
+| returns | mean | Sharpe | CVaR 5% | win rate |
+|---|---|---|---|---|
+| GBM (Gaussian) | +0.4626 | **1.227** | **−0.2610** | 90.8% |
+| real, IID bootstrap | +0.4962 | 0.682 | **−1.6369** | 83.4% |
+| real, block = 5 | +0.5847 | 0.682 | **−2.0099** | 85.5% |
+
+**At identical volatility, the tail is 6–8× worse and the Sharpe roughly halves.** The Gaussian
+run's worst month is about −2; on real return shapes it is −8 to −12, several times the annual
+premium. Clustering adds materially on top of fat tails alone (−1.64 → −2.01), which is the case for
+using a block bootstrap rather than an IID one.
+
+Once again **the mean does not warn you** — it drifts *up* (+0.46 → +0.58) while the tail collapses.
+That is the third time the same pattern appears in this repo, alongside the Heston stress and the
+skew result, and it is the argument for CVaR in one sentence.
+
+> Still assumed, even here: the *level* of realized vol is imposed rather than sampled jointly with
+> the option's implied vol, and the resampling breaks the real dependence between vol regimes and
+> the premium available. A full answer needs an option-chain history — OptionMetrics, CBOE DataShop
+> or ORATS — and a genuine monthly roll rather than a bootstrap.
 
 ## Which strike to sell
 
@@ -266,9 +335,12 @@ src/vrp/
   backtest.py    # vrp_pnl_paths / vrp_backtest / vrp_curve — MC harness     [harness]
   stress.py      # HestonParams / heston_pnl_paths — the stochastic-vol stress
   moneyness.py   # strike_for_delta / moneyness_sweep — the strike ladder + skew
+  marketdata.py  # load_market_data / measure_vrp — the premium, measured from VIX
+  bootstrap.py   # resample real S&P returns (IID / moving block) into the hedge
   stats.py       # summarize_pnl — mean / Sharpe / CVaR / win-rate           [harness]
   plot.py        # P&L histogram, VRP curve, stress curve (optional: .[plot])
-scripts/         # make_figures.py, benchmark_backends.py
+scripts/         # make_figures.py, benchmark_backends.py, fetch_market_data.py
+data/            # vendored daily SPX + VIX closes (committed: reproducibility)
 docs/            # the README figures (light + dark)
 tests/           # pytest
 notebooks/       # analysis write-ups
@@ -285,6 +357,8 @@ notebooks/       # analysis write-ups
 - [x] Transaction costs + the rebalancing-frequency trade-off — an interior optimum that
       moves with cost.
 - [x] Moneyness / skew sweep — the strike ladder by delta; skew moves the best strike in the money.
+- [x] Real data — the premium **measured** from VIX vs subsequent realized (+4.10 vol points,
+      positive 85.8% of days since 1990), and real return shapes bootstrapped through the hedge.
 
-Next: replace the assumed `sigma_realized` with a **block bootstrap of real returns**, and use
-VIX-vs-realized to show the premium is a measured fact rather than a parameter.
+Next: a genuine monthly roll on an option-chain history (OptionMetrics / CBOE DataShop / ORATS)
+rather than a bootstrap, and CI so the suite runs on every push.

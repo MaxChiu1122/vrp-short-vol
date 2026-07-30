@@ -237,6 +237,102 @@ def plot_frequency_sweep(sweep, *, steps_per_day: float, theme: str = "light", a
     return axes
 
 
+def plot_vrp_history(measurement, *, theme: str = "light", ax=None):
+    """The measured variance risk premium: VIX minus subsequent realized vol.
+
+    ``measurement`` is a ``vrp.marketdata.VrpMeasurement``. This is the one figure
+    in the repo made of data rather than simulation, and it is what turns the
+    premium from an assumption into an observation: mostly positive, for decades,
+    punctuated by short violent episodes where it inverts hard.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8.5, 4.2))
+        fig.patch.set_facecolor(t["surface"])
+
+    x = measurement.dates.astype("datetime64[D]").astype(object)
+    spread = measurement.spread * 100.0  # vol points
+
+    # Sign carries the meaning here, so it gets a diverging treatment: earned above
+    # zero, paid below. Not two data series -- one series against a reference.
+    ax.fill_between(x, spread, 0, where=spread >= 0, color=t["series"], alpha=0.75, lw=0)
+    ax.fill_between(x, spread, 0, where=spread < 0, color=t["critical"], alpha=0.85, lw=0)
+    ax.axhline(0.0, color=t["axis"], lw=1.0)
+
+    mean_vp = measurement.mean_spread_vol_points
+    ax.axhline(mean_vp, color=t["ink"], lw=1.5, ls=(0, (4, 2)))
+    ax.annotate(
+        f"mean {mean_vp:+.2f} vol points · positive {measurement.fraction_positive:.0%} of days",
+        xy=(0.015, 0.06),
+        xycoords="axes fraction",
+        color=t["ink"],
+        fontsize=9.5,
+        fontweight="bold",
+    )
+
+    ax.set_ylabel("VIX − subsequent realized (vol points)")
+    ax.set_title(
+        "The premium is measured, not assumed",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    _style_axes(ax, t)
+    return ax
+
+
+def plot_return_shape_comparison(series, *, theme: str = "light", ax=None):
+    """Overlaid P&L distributions on a log count axis, to make the tails visible.
+
+    ``series`` is a list of ``(label, pnls)``. A linear histogram hides exactly what
+    matters here -- the difference lives in the far left, where counts are small --
+    so the y axis is logarithmic and each distribution's 5% CVaR is ruled.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    colors = [t["series"], t["contrast"], t["critical"]]
+    if len(series) > len(colors):
+        raise ValueError(f"at most {len(colors)} distributions, got {len(series)}")
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8.0, 4.6))
+        fig.patch.set_facecolor(t["surface"])
+
+    lo = min(float(np.percentile(p, 0.05)) for _label, p in series)
+    hi = max(float(np.percentile(p, 99.9)) for _label, p in series)
+    bins = np.linspace(lo, hi, 120)
+
+    for (label, pnls), color in zip(series, colors):
+        a = np.asarray(pnls, dtype=float)
+        k = max(1, int(round(0.05 * a.size)))
+        cvar = float(np.sort(a)[:k].mean())
+        ax.hist(a, bins=bins, histtype="step", lw=2.0, color=color, label=f"{label}  (CVaR {cvar:+.2f})")
+        ax.axvline(cvar, color=color, lw=1.5, ls=(0, (4, 2)), alpha=0.9)
+
+    ax.set_yscale("log")
+    ax.axvline(0.0, color=t["axis"], lw=1.0)
+    ax.set_xlabel("P&L per trade")
+    ax.set_ylabel("paths (log scale)")
+    leg = ax.legend(loc="upper left", frameon=False, fontsize=9)
+    for text in leg.get_texts():
+        text.set_color(t["ink_secondary"])
+    ax.set_title(
+        "Same volatility, different returns: the tail is where they differ",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    _style_axes(ax, t)
+    return ax
+
+
 def plot_moneyness_sweep(flat, skewed, *, theme: str = "light", axes=None):
     """Mean P&L and Sharpe across target delta, flat surface vs a skewed one.
 

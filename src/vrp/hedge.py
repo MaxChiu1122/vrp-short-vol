@@ -21,6 +21,7 @@ def hedged_short_option_pnl(
     n_steps: int,
     rng,  # numpy.random.Generator
     cost_bps: float = 0.0,
+    log_returns=None,
 ) -> float:
     """P&L of SELLING one European call and delta-hedging it to expiry.
 
@@ -45,6 +46,12 @@ def hedged_short_option_pnl(
     discrete-hedging risk falls like 1/sqrt(n_steps). Cost and risk move in
     opposite directions and there is an interior optimum.
 
+    ``log_returns`` optionally supplies the path's per-step log returns instead of
+    drawing them from GBM -- that is the seam the real-data backtest plugs into (see
+    ``vrp.bootstrap``), so resampled market returns can drive the same hedge.
+    It must have length ``n_steps``; when given, ``sigma_realized`` no longer
+    describes the path and ``rng`` is not consumed.
+
     Rates and vols are annualized; ``T`` is in years. The path is simulated under
     the risk-neutral drift ``r``, which makes E[P&L] exactly zero when the two vols
     agree and ``cost_bps`` is zero, for any ``n_steps``. Units: currency, same as
@@ -52,6 +59,11 @@ def hedged_short_option_pnl(
     """
     dt = T / n_steps
     cost_rate = cost_bps * 1e-4
+
+    if log_returns is not None and len(log_returns) != n_steps:
+        raise ValueError(
+            f"log_returns has length {len(log_returns)}, expected n_steps={n_steps}"
+        )
 
     # t=0: collect the premium, then buy the initial hedge out of that cash.
     # Both are quoted at sigma_implied -- it is all you can observe.
@@ -62,11 +74,14 @@ def hedged_short_option_pnl(
 
     S = S0
     for i in range(1, n_steps + 1):
-        # The world moves at sigma_realized; we held the previous delta through it.
-        Z = rng.standard_normal()
-        S *= math.exp(
-            (r - 0.5 * sigma_realized**2) * dt + sigma_realized * math.sqrt(dt) * Z
-        )
+        # The world moves; we held the previous delta through it. Either a GBM draw
+        # at sigma_realized, or a supplied (e.g. resampled market) log return.
+        if log_returns is None:
+            Z = rng.standard_normal()
+            step = (r - 0.5 * sigma_realized**2) * dt + sigma_realized * math.sqrt(dt) * Z
+        else:
+            step = log_returns[i - 1]
+        S *= math.exp(step)
         cash *= math.exp(r * dt)  # self-financing: the cash leg earns the risk-free rate
 
         # Rebalance at the *remaining* maturity, funded entirely from cash. Skipped at
