@@ -25,13 +25,18 @@ from vrp import (  # noqa: E402
     vrp_curve,
     vrp_pnl_paths,
 )
+from vrp.moneyness import TYPICAL_EQUITY_SKEW, moneyness_sweep  # noqa: E402
 from vrp.plot import (  # noqa: E402
     THEMES,
     plot_frequency_sweep,
+    plot_moneyness_sweep,
     plot_pnl_distribution,
     plot_stress_curve,
     plot_vrp_curve,
 )
+
+# Strike ladder, quoted by delta the way a desk would.
+TARGET_DELTAS = (0.75, 0.60, 0.50, 0.40, 0.30, 0.25, 0.15, 0.10)
 
 # Rebalancing-frequency sweep. T = 1/12 year is ~21 trading days, so n_steps=21 is
 # once a day; the grid spans roughly twice-weekly to ~24x a day.
@@ -111,8 +116,38 @@ def main() -> None:
             row += f"{res.sharpe:>11.3f}   "
         print(row)
 
+    # Strike ladder, flat surface vs a realistic equity skew.
+    money_flat = moneyness_sweep(
+        target_deltas=TARGET_DELTAS,
+        sigma_atm=SIGMA_IMPLIED,
+        sigma_realized=SIGMA_REALIZED,
+        skew_slope=0.0,
+        n_paths=20_000,
+        seed=SEED,
+    )
+    money_skew = moneyness_sweep(
+        target_deltas=TARGET_DELTAS,
+        sigma_atm=SIGMA_IMPLIED,
+        sigma_realized=SIGMA_REALIZED,
+        skew_slope=TYPICAL_EQUITY_SKEW,
+        n_paths=20_000,
+        seed=SEED,
+    )
+    print("\n  delta      K    flat: s_impl mean Sharpe    skewed: s_impl mean Sharpe")
+    for (d, K, s_f, r_f), (_d, _K, s_s, r_s) in zip(money_flat, money_skew):
+        print(
+            f"  {d:>5.2f} {K:>7.2f}      {s_f:>6.3f} {r_f.mean_pnl:>+7.4f} {r_f.sharpe:>6.3f}"
+            f"        {s_s:>6.3f} {r_s.mean_pnl:>+7.4f} {r_s.sharpe:>6.3f}"
+        )
+
     for theme in ("light", "dark"):
         surface = THEMES[theme]["surface"]
+
+        axes = plot_moneyness_sweep(money_flat, money_skew, theme=theme)
+        out = FIGURES / f"moneyness_{theme}.png"
+        axes[0].figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(axes[0].figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
 
         axes = plot_frequency_sweep(sweep, steps_per_day=STEPS_PER_DAY, theme=theme)
         out = FIGURES / f"hedge_frequency_{theme}.png"

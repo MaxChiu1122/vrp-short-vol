@@ -23,6 +23,7 @@ THEMES = {
         grid="#e1e0d9",
         axis="#c3c2b7",
         series="#2a78d6",
+        contrast="#eb6834",  # second categorical slot, for a two-series comparison
         critical="#d03b3b",
     ),
     "dark": dict(
@@ -33,6 +34,7 @@ THEMES = {
         grid="#2c2c2a",
         axis="#383835",
         series="#3987e5",
+        contrast="#d95926",  # second categorical slot, stepped for the dark surface
         critical="#d03b3b",
     ),
 }
@@ -226,6 +228,66 @@ def plot_frequency_sweep(sweep, *, steps_per_day: float, theme: str = "light", a
         text.set_color(t["ink_secondary"])
     ax_sharpe.set_title(
         "Hedging more is only free if trading is",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    return axes
+
+
+def plot_moneyness_sweep(flat, skewed, *, theme: str = "light", axes=None):
+    """Mean P&L and Sharpe across target delta, flat surface vs a skewed one.
+
+    Both arguments are ``(delta, K, sigma_implied, VrpResult)`` lists from
+    ``vrp.moneyness_sweep``. The x axis runs in-the-money (left) to out-of-the-money
+    (right), the way a strike ladder is usually read.
+
+    On a flat surface the edge simply peaks at the money, because dollar gamma
+    ``½S²Γ`` and vega both do. Quote a realistic equity skew -- calls above the
+    money priced *below* the ATM vol -- and the peak slides in-the-money: out there
+    you are selling a vol spread that the surface has already taken away from you.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    series = (
+        ("flat surface", flat, t["series"]),
+        ("with equity skew", skewed, t["contrast"]),
+    )
+
+    if axes is None:
+        fig, axes = plt.subplots(2, 1, figsize=(7.5, 6.0), sharex=True)
+        fig.patch.set_facecolor(t["surface"])
+    ax_mean, ax_sharpe = axes
+
+    for label, rows, color in series:
+        x = np.array([d for d, _K, _s, _r in rows])
+        means = np.array([r.mean_pnl for _d, _K, _s, r in rows])
+        sharpes = np.array([r.sharpe for _d, _K, _s, r in rows])
+        ax_mean.plot(x, means, "-o", color=color, lw=2.0, ms=5.0, label=label, zorder=3)
+        ax_sharpe.plot(x, sharpes, "-o", color=color, lw=2.0, ms=5.0, zorder=3)
+
+        best = int(np.argmax(sharpes))
+        ax_sharpe.plot(
+            x[best], sharpes[best], "o", ms=13, mfc="none", mec=color, mew=2.0, zorder=5
+        )
+
+    for ax in (ax_mean, ax_sharpe):
+        ax.axhline(0.0, color=t["axis"], lw=1.0, zorder=1)
+        _style_axes(ax, t)
+    # The axes are shared, so invert ONCE -- inverting both would cancel out.
+    ax_mean.invert_xaxis()  # ITM on the left, OTM on the right
+
+    ax_mean.set_ylabel("mean P&L per trade")
+    ax_sharpe.set_ylabel("Sharpe (per trade)")
+    ax_sharpe.set_xlabel("target call delta   ←  in the money      out of the money  →")
+    leg = ax_mean.legend(loc="lower left", frameon=False, fontsize=9)
+    for text in leg.get_texts():
+        text.set_color(t["ink_secondary"])
+    ax_mean.set_title(
+        "Skew decides where the edge lives",
         color=t["ink"],
         fontsize=12,
         fontweight="bold",

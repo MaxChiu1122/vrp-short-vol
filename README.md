@@ -85,6 +85,47 @@ python scripts/make_figures.py
 > that the premium exists in real markets. (It does: S&P implied has run ~2–4 vol points above
 > subsequent realized for decades. This repo assumes that, it doesn't demonstrate it.)
 
+## Which strike to sell
+
+Desks quote options by **delta**, not strike — a "25-delta call" is a fixed point on the surface,
+while a fixed strike drifts as spot moves. So the ladder is swept by target delta, solving
+`K = S·exp(−N⁻¹(Δ)·σ√T + (r + σ²/2)T)` for each rung.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/moneyness_dark.png">
+  <img alt="Two stacked panels across target call delta, in-the-money on the left to out-of-the-money on the right. On a flat surface both mean P&L and Sharpe peak near 0.5 delta and fall away on both sides. With equity skew applied, both curves are higher in the money and collapse out of the money, with mean falling from +0.49 at 0.75 delta to +0.03 at 0.10 delta." src="docs/moneyness_light.png">
+</picture>
+
+**On a flat surface the edge peaks at the money** — dollar gamma `½S²Γ` and vega both do, and the
+harvested spread follows them. A 10-delta call earns +0.166 against the ATM's +0.465.
+
+But a flat surface is a fiction, and correcting it changes the conclusion. Real equity index calls
+above the money are quoted *below* the ATM vol. Applying a linear skew in log-moneyness
+(`σ(K) = σ_atm + slope·ln(K/S)`, slope −0.4 — illustrative, roughly −2 vol points at a 25-delta call):
+
+| target Δ | strike | σ flat | σ skewed | mean (flat) | mean (skewed) | Sharpe (skewed) |
+|---|---|---|---|---|---|---|
+| 0.75 | 96.50 | 0.200 | 0.214 | +0.354 | **+0.487** | **1.377** |
+| 0.50 | 100.33 | 0.200 | 0.199 | +0.465 | +0.450 | 1.201 |
+| 0.25 | 104.32 | 0.200 | 0.183 | +0.346 | +0.194 | 0.653 |
+| 0.10 | 108.04 | 0.200 | 0.169 | +0.166 | **+0.031** | 0.194 |
+
+**The skew moves the best strike in the money.** Selling a 25-delta call loses 44% of its edge once
+the surface is priced properly (+0.346 → +0.194), and a 10-delta call keeps almost nothing — you are
+selling a vol spread the surface already took away from you. Its CVaR gets *worse* at the same time
+(−0.225 → −0.411), because a thinner premium cushions the same bad path less well. Both directions
+move against you.
+
+Meanwhile the low-strike end improves, since the skew quotes those *above* the ATM vol. That is a
+sanity check on the whole exercise rather than a surprise: by put–call parity selling a low-strike
+call is selling the downside wing, which is exactly where real short-vol programmes sell. The model
+reproduces the practice.
+
+> The skew here is a **two-parameter caricature**, not a calibrated surface — one linear slope in
+> log-moneyness, applied to a flat-vol hedging model. It is enough to show the *direction and rough
+> size* of the effect, which is the point; a real answer needs a fitted surface and deltas computed
+> against it.
+
 ## What it costs to run
 
 Everything above is **gross**. Delta-hedging means trading the underlying 21 times a month, and
@@ -224,6 +265,7 @@ src/vrp/
   hedge.py       # hedged_short_option_pnl — the VRP core (one path's P&L)   [Max]
   backtest.py    # vrp_pnl_paths / vrp_backtest / vrp_curve — MC harness     [harness]
   stress.py      # HestonParams / heston_pnl_paths — the stochastic-vol stress
+  moneyness.py   # strike_for_delta / moneyness_sweep — the strike ladder + skew
   stats.py       # summarize_pnl — mean / Sharpe / CVaR / win-rate           [harness]
   plot.py        # P&L histogram, VRP curve, stress curve (optional: .[plot])
 scripts/         # make_figures.py, benchmark_backends.py
@@ -242,7 +284,7 @@ notebooks/       # analysis write-ups
       generalization of its delta-hedge) — **75×**, 5.4M paths/s.
 - [x] Transaction costs + the rebalancing-frequency trade-off — an interior optimum that
       moves with cost.
+- [x] Moneyness / skew sweep — the strike ladder by delta; skew moves the best strike in the money.
 
-Next, in order: a **moneyness/skew sweep** (sell a 25-delta call rather than ATM), and then
-replacing the assumed `sigma_realized` with a **block bootstrap of real returns**, using
+Next: replace the assumed `sigma_realized` with a **block bootstrap of real returns**, and use
 VIX-vs-realized to show the premium is a measured fact rather than a parameter.

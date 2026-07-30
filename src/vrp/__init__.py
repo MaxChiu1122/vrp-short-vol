@@ -16,6 +16,12 @@ from .backtest import (
 )
 from .hedge import hedged_short_option_pnl
 from .stats import VrpResult, summarize_pnl
+from .moneyness import (
+    TYPICAL_EQUITY_SKEW,
+    implied_vol_at_strike,
+    moneyness_sweep,
+    strike_for_delta,
+)
 from .stress import HestonParams, heston_pnl_paths
 
 __all__ = [
@@ -26,6 +32,10 @@ __all__ = [
     "vrp_curve",
     "vrp_pnl_paths",
     "hedge_frequency_sweep",
+    "moneyness_sweep",
+    "strike_for_delta",
+    "implied_vol_at_strike",
+    "TYPICAL_EQUITY_SKEW",
     "HestonParams",
     "heston_pnl_paths",
     "BACKENDS",
