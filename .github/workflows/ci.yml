@@ -1,0 +1,90 @@
+name: CI
+
+# The point of CI here is specific: this repo's numerics come from a SEPARATE
+# repo's C++ extension (mcpricer, resolved from git). A change there can break this
+# strategy layer without a single file changing here, and that failure is invisible
+# until someone happens to run pytest. So every push rebuilds the engine from
+# source and runs the full suite against it.
+#
+# The test suite is deliberately offline -- the market data is vendored in data/ --
+# so the only network needed is installing the engine itself.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install (builds the mcpricer C++ extension from source)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Check the engine exposes what this repo needs
+        # A clearer failure than a mid-suite AttributeError if mcpricer drifts.
+        run: |
+          python - <<'PY'
+          import sys
+          import mcpricer as mc
+
+          print("mcpricer", mc.__version__, "at", mc.__file__)
+          needed = ("delta_hedge_pnl_two_vol_paths", "delta_hedge_pnl_heston_paths")
+          missing = [n for n in needed if not hasattr(mc, n)]
+          if missing:
+              sys.exit(f"engine is missing {missing} -- the two-vol/Heston generalization")
+          PY
+
+      - name: Run the suite
+        run: python -m pytest -q
+
+  figures:
+    name: figure script runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install with the plot extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test,plot]"
+
+      - name: Regenerate the figures
+        # Catches the script rotting against the library it calls -- an import
+        # error, a renamed argument, a function that moved. It does NOT verify the
+        # figures are correct: nothing asserts on their contents, so a silently
+        # wrong plot still gets through here.
+        #
+        # Deliberately NOT comparing the output against the committed docs/*.png.
+        # The figures are seeded and byte-stable on one machine, but the font stack
+        # resolves differently across platforms (Helvetica on macOS, DejaVu on
+        # Ubuntu), so a diff check would fail on correct code.
+        run: python scripts/make_figures.py

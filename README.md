@@ -1,9 +1,16 @@
 # vrp-short-vol
 
+[![CI](https://github.com/MaxChiu1122/vrp-short-vol/actions/workflows/ci.yml/badge.svg)](https://github.com/MaxChiu1122/vrp-short-vol/actions/workflows/ci.yml)
+
 A **systematic short-volatility strategy**, backtested as a Monte-Carlo *distribution*
 rather than a single historical path. Built on the
 [`mcpricer`](https://github.com/MaxChiu1122/Monte-Carlo_option_pricer) C++ pricing/Greeks
 engine — this repo is the strategy/research layer that consumes it.
+
+> **66 pytest tests green**, run on every push against the engine rebuilt from source. On a
+> 4-vol-point spread the strategy shows Sharpe 1.23 with a losing 5% tail — and that tail gets
+> 4× worse under stochastic vol, and 6–8× worse on real return shapes. The premium itself is
+> measured, not assumed: **+4.10 vol points**, positive on 85.8% of days since 1990.
 
 ## The idea
 
@@ -346,19 +353,18 @@ tests/           # pytest
 notebooks/       # analysis write-ups
 ```
 
-## Status / roadmap
+## Limitations, and what would come next
 
-- [x] Harness + distribution stats (mean, Sharpe, CVaR) — tested.
-- [x] **`hedged_short_option_pnl`** — the two-vol hedged short-call P&L (the VRP core).
-- [x] VRP curve + P&L-distribution plots on a realistic contract.
-- [x] Heston-realized stress: the tail fattens 4× while the mean holds.
-- [x] Speed: the per-path core moved into the `mcpricer` C++ engine (implied ≠ realized
-      generalization of its delta-hedge) — **75×**, 5.4M paths/s.
-- [x] Transaction costs + the rebalancing-frequency trade-off — an interior optimum that
-      moves with cost.
-- [x] Moneyness / skew sweep — the strike ladder by delta; skew moves the best strike in the money.
-- [x] Real data — the premium **measured** from VIX vs subsequent realized (+4.10 vol points,
-      positive 85.8% of days since 1990), and real return shapes bootstrapped through the hedge.
+Three places this is deliberately a model rather than a measurement, each flagged where it
+appears above:
 
-Next: a genuine monthly roll on an option-chain history (OptionMetrics / CBOE DataShop / ORATS)
-rather than a bootstrap, and CI so the suite runs on every push.
+- **The option is priced off a flat vol.** The skew section shows the direction and rough size of
+  the error with a two-parameter caricature, not a calibrated surface.
+- **Costs cover the hedge only** — no bid-ask on the option itself, no margin or financing.
+- **The realized-vol *level* is imposed**, even in the bootstrap. Returns are resampled for their
+  shape, then rescaled to a chosen vol; they are not drawn jointly with the implied vol that was
+  quoted at the time.
+
+The next real step is a **genuine monthly roll on an option-chain history** — OptionMetrics,
+CBOE DataShop or ORATS — which replaces all three at once with what was actually quoted and
+actually tradeable.
