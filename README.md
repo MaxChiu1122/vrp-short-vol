@@ -28,6 +28,11 @@ premium — the strategy earns the **variance risk premium (VRP)**. Because the 
 **short gamma**, a realized-vol spike (a crash) produces a sharp loss: the P&L is
 left-skewed, and the tail is what actually matters.
 
+[`notebooks/01-anatomy-of-a-hedge.ipynb`](notebooks/01-anatomy-of-a-hedge.ipynb) opens up a single
+path — the spot, the delta, the cash, the P&L accruing step by step — and verifies that identity
+numerically, showing the gap between it and the realized P&L shrink like `1/√n` as the hedge
+refines. That is the sharpest evidence in the repo that the engine computes what the theory says.
+
 ## Why a *distributional* backtest
 
 A single historical path tells you what happened once. Because `mcpricer` is fast and
@@ -350,7 +355,7 @@ scripts/         # make_figures.py, benchmark_backends.py, fetch_market_data.py
 data/            # vendored daily SPX + VIX closes (committed: reproducibility)
 docs/            # the README figures (light + dark)
 tests/           # pytest
-notebooks/       # analysis write-ups
+notebooks/       # 01-anatomy-of-a-hedge.ipynb — one path, opened up
 ```
 
 ## Limitations, and what would come next
