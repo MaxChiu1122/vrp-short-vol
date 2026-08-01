@@ -26,13 +26,16 @@ from vrp import (  # noqa: E402
     vrp_pnl_paths,
 )
 from vrp import bootstrap_pnl_paths, measure_vrp  # noqa: E402
+from vrp.roll import monthly_roll, regress_on_market  # noqa: E402
 from vrp.moneyness import TYPICAL_EQUITY_SKEW, moneyness_sweep  # noqa: E402
 from vrp.plot import (  # noqa: E402
     THEMES,
     plot_frequency_sweep,
     plot_moneyness_sweep,
     plot_pnl_distribution,
+    plot_market_regression,
     plot_return_shape_comparison,
+    plot_roll_equity,
     plot_stress_curve,
     plot_vrp_curve,
     plot_vrp_history,
@@ -162,8 +165,27 @@ def main() -> None:
     for label, p in real_series:
         print(f"  {label:<24} {summarize_pnl(p)}")
 
+    # The historical monthly roll. 1 vol point off VIX (it prints above the ATM
+    # implied this sells) and 1bp of hedging cost -- the central, defensible case.
+    roll = monthly_roll(implied_haircut=0.010, cost_bps=1.0)
+    reg = regress_on_market(roll)
+    print(f"\n  monthly roll: {roll}")
+    print(f"  regression  : {reg}")
+
     for theme in ("light", "dark"):
         surface = THEMES[theme]["surface"]
+
+        axes = plot_roll_equity(roll, theme=theme)
+        out = FIGURES / f"roll_equity_{theme}.png"
+        axes[0].figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(axes[0].figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
+
+        ax = plot_market_regression(roll, reg, theme=theme)
+        out = FIGURES / f"roll_beta_{theme}.png"
+        ax.figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(ax.figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
 
         ax = plot_vrp_history(measurement, theme=theme)
         out = FIGURES / f"vrp_history_{theme}.png"

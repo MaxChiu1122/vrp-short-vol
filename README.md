@@ -7,10 +7,11 @@ rather than a single historical path. Built on the
 [`mcpricer`](https://github.com/MaxChiu1122/Monte-Carlo_option_pricer) C++ pricing/Greeks
 engine — this repo is the strategy/research layer that consumes it.
 
-> **66 pytest tests green**, run on every push against the engine rebuilt from source. On a
-> 4-vol-point spread the strategy shows Sharpe 1.23 with a losing 5% tail — and that tail gets
-> 4× worse under stochastic vol, and 6–8× worse on real return shapes. The premium itself is
-> measured, not assumed: **+4.10 vol points**, positive on 85.8% of days since 1990.
+> **83 pytest tests green**, run on every push against the engine rebuilt from source.
+> Rolled through 36 years of real history the strategy earns **+3.96%/yr at Sharpe 2.05** with a
+> −4.63% max drawdown, and only 15% of that is equity beta. The premium it harvests is measured,
+> not assumed: **+4.10 vol points**, positive on 85.8% of days since 1990. What kills it is not the
+> signal but the sizing — see the leverage table.
 
 ## The idea
 
@@ -349,6 +350,7 @@ src/vrp/
   moneyness.py   # strike_for_delta / moneyness_sweep — the strike ladder + skew
   marketdata.py  # load_market_data / measure_vrp — the premium, measured from VIX
   bootstrap.py   # resample real S&P returns (IID / moving block) into the hedge
+  roll.py        # monthly_roll / regress_on_market — the historical track record
   stats.py       # summarize_pnl — mean / Sharpe / CVaR / win-rate           [harness]
   plot.py        # P&L histogram, VRP curve, stress curve (optional: .[plot])
 scripts/         # make_figures.py, benchmark_backends.py, fetch_market_data.py
@@ -358,6 +360,97 @@ tests/           # pytest
 notebooks/       # 01-anatomy-of-a-hedge.ipynb — one path, opened up
 ```
 
+## What it would actually have done
+
+Everything above reports the distribution of **one trade, drawn many times independently**. That
+has no time axis — and a strategy lives on one. Losses cluster; drawdowns compound; "the worst 5%
+of paths" says nothing about whether those paths arrive consecutively.
+
+So this rolls the trade through actual history: on each roll date sell a one-month ATM call at the
+**VIX quoted that day**, delta-hedge daily against the S&P's real closes, settle, repeat. Windows
+are **non-overlapping**, giving 438 genuinely independent trades since 1990 rather than the ~9,000
+correlated ones overlapping windows would manufacture. P&L is a fraction of notional, since the
+index ran from 359 to 7,400 over the sample.
+
+The headline case takes **1 vol point off VIX** (it is a variance-swap-style measure of the whole
+surface, so it prints above the ATM option this actually sells) and charges **1 bp** of hedging cost.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/roll_equity_dark.png">
+  <img alt="Cumulative P&L of 438 monthly trades from 1990 to 2026, rising steadily to about 145% of notional, with a drawdown panel beneath showing repeated small drawdowns and a maximum of -4.63% in early 2020." src="docs/roll_equity_light.png">
+</picture>
+
+| | |
+|---|---|
+| trades | 438 (1990–2026, non-overlapping) |
+| mean per trade | **+0.330%** of notional |
+| annualized return | **+3.96%** at constant notional |
+| annualized vol | 1.93% |
+| **annualized Sharpe** | **2.05** |
+| hit rate | 78.3% |
+| max drawdown | **−4.63%** |
+| worst trade | −3.52% (March 2020) |
+| longest underwater | 10 trades |
+| serial correlation | **+0.11** |
+
+That serial correlation matters: **losses cluster**, so the i.i.d. simulations elsewhere in this
+repo understate how bad a *run* can get. The drawdown panel makes the point better than any
+distribution can — 2008 and 2020 are not scattered bad draws, they are trenches.
+
+**The edge survives the assumptions.** Sweeping the VIX haircut against costs:
+
+| haircut | 0 bp | 1 bp | 5 bp |
+|---|---|---|---|
+| 0.0 vp | 2.81 | 2.71 | 2.28 |
+| 0.5 vp | 2.49 | 2.38 | 1.95 |
+| 1.0 vp | 2.16 | **2.05** | 1.61 |
+| 1.5 vp | 1.82 | 1.70 | 1.25 |
+
+(annualized Sharpe). Even at 1.5 vol points of haircut *and* 5 bp of cost it clears 1.2.
+
+### The number that Sharpe hides
+
+**Sharpe 2.05, but the return is 3.96%/yr on full notional.** That is not a strategy anyone runs
+unlevered — and levering it is where short-vol books die:
+
+| leverage | return | max drawdown | worst month |
+|---|---|---|---|
+| 1× | +4.0% | −4.6% | −3.5% |
+| 5× | +19.8% | −23.2% | −17.6% |
+| 10× | +39.6% | −46.3% | −35.2% |
+
+The signal is the easy part. **Sizing is the whole game**, and this repo still has no capital base,
+no margin model and no sizing rule — the honest gap named at the bottom of this file.
+
+## Alpha, or equity beta wearing a hat?
+
+The question every short-vol pitch gets. Regressing per-trade P&L on the S&P return over the same
+window, and fitting the up and down halves separately, because a single beta averages away the
+asymmetry that matters:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/roll_beta_dark.png">
+  <img alt="Scatter of strategy P&L against S&P return per trade. Points where the market rose are flat or slightly declining; points where the market fell slope clearly downward to the left, reaching -3.5% at a -19% market move. Fitted lines show beta -0.025 up versus +0.103 down, R-squared 0.154." src="docs/roll_beta_light.png">
+</picture>
+
+| | |
+|---|---|
+| beta (full sample) | **+0.049** |
+| R² | **0.154** |
+| alpha | **+3.55%/yr** |
+| beta, market **down** | **+0.103** |
+| beta, market **up** | −0.025 |
+
+**Mostly not beta.** Only 15% of the variance is explained by the market, and the full-sample beta
+is 0.05 — the delta hedge is doing its job. Alpha survives at +3.55%/yr after removing market
+exposure, so this is not the index in disguise.
+
+**But the beta is asymmetric, and that asymmetry is the risk.** Four times more market-sensitive
+when the market falls (+0.103) than when it rises (−0.025). The strategy is market-neutral exactly
+when neutrality is worthless and correlated exactly when it hurts — which is precisely what a
+premium for bearing crash risk should look like. You are not being paid for nothing; you are being
+paid for that.
+
 ## Limitations, and what would come next
 
 Three places this is deliberately a model rather than a measurement, each flagged where it
@@ -366,10 +459,14 @@ appears above:
 - **The option is priced off a flat vol.** The skew section shows the direction and rough size of
   the error with a two-parameter caricature, not a calibrated surface.
 - **Costs cover the hedge only** — no bid-ask on the option itself, no margin or financing.
-- **The realized-vol *level* is imposed**, even in the bootstrap. Returns are resampled for their
-  shape, then rescaled to a chosen vol; they are not drawn jointly with the implied vol that was
-  quoted at the time.
+- **The realized-vol *level* is imposed** in the simulations (the historical roll does not do this
+  — there the vol is whatever happened).
+- **VIX stands in for an ATM implied vol** in the roll. It prints above the option actually sold, so
+  the results carry a haircut sweep rather than a single number.
+- **There is no capital base.** P&L is a fraction of notional; there is no margin model and no
+  sizing rule, which the leverage table above shows is the decisive missing piece.
 
-The next real step is a **genuine monthly roll on an option-chain history** — OptionMetrics,
-CBOE DataShop or ORATS — which replaces all three at once with what was actually quoted and
-actually tradeable.
+Two next steps, in order. **Sizing** — turn the CVaR this repo computes everywhere into a position
+rule, since the leverage table shows that is what separates a 4%/yr curiosity from a blow-up. Then
+an **option-chain history** (OptionMetrics, CBOE DataShop, ORATS) to replace the VIX proxy and the
+flat-vol assumption with what was actually quoted and tradeable.

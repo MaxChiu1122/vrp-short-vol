@@ -24,6 +24,7 @@ from .moneyness import (
     moneyness_sweep,
     strike_for_delta,
 )
+from .roll import MarketRegression, RollResult, monthly_roll, regress_on_market
 from .stress import HestonParams, heston_pnl_paths
 
 __all__ = [
@@ -42,6 +43,10 @@ __all__ = [
     "load_market_data",
     "measure_vrp",
     "MarketData",
+    "monthly_roll",
+    "regress_on_market",
+    "RollResult",
+    "MarketRegression",
     "HestonParams",
     "heston_pnl_paths",
     "BACKENDS",

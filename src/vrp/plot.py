@@ -237,6 +237,117 @@ def plot_frequency_sweep(sweep, *, steps_per_day: float, theme: str = "light", a
     return axes
 
 
+def plot_roll_equity(roll, *, theme: str = "light", axes=None):
+    """Cumulative P&L of the historical monthly roll, with its drawdown beneath.
+
+    The figure a distribution cannot produce. Everything else in the repo treats
+    trades as independent draws; here they are in the order they happened, so the
+    drawdowns are real -- losses arriving consecutively rather than scattered.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    x = roll.dates.astype("datetime64[D]").astype(object)
+    curve = roll.equity_curve * 100.0
+    peak = np.maximum.accumulate(curve)
+    drawdown = curve - peak
+
+    if axes is None:
+        fig, axes = plt.subplots(
+            2, 1, figsize=(8.5, 5.6), sharex=True, gridspec_kw=dict(height_ratios=[2, 1])
+        )
+        fig.patch.set_facecolor(t["surface"])
+    ax_eq, ax_dd = axes
+
+    ax_eq.plot(x, curve, color=t["series"], lw=2.0, zorder=3)
+    ax_eq.axhline(0.0, color=t["axis"], lw=1.0)
+    ax_eq.set_ylabel("cumulative P&L (% of notional)")
+
+    ax_dd.fill_between(x, drawdown, 0, color=t["critical"], alpha=0.85, lw=0)
+    ax_dd.axhline(0.0, color=t["axis"], lw=1.0)
+    ax_dd.set_ylabel("drawdown (%)")
+
+    worst = int(np.argmin(drawdown))
+    ax_dd.annotate(
+        f"max drawdown {drawdown[worst]:.2f}%",
+        xy=(x[worst], drawdown[worst]),
+        xytext=(8, 8),
+        textcoords="offset points",
+        color=t["critical"],
+        fontsize=9,
+        fontweight="bold",
+    )
+
+    for ax in (ax_eq, ax_dd):
+        _style_axes(ax, t)
+    ax_eq.set_title(
+        f"{len(roll)} monthly trades, in the order they happened",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    return axes
+
+
+def plot_market_regression(roll, regression, *, theme: str = "light", ax=None):
+    """Trade P&L against the market return, split on the sign of the market move.
+
+    A short-vol book is expected to look market-neutral on average and distinctly
+    not so when the market falls. Fitting one line to each half makes that
+    asymmetry visible where a single beta would average it away.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    x = roll.market_return * 100.0
+    y = roll.pnl * 100.0
+    down = x < 0
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(7.0, 5.0))
+        fig.patch.set_facecolor(t["surface"])
+
+    ax.scatter(x[~down], y[~down], s=16, color=t["series"], alpha=0.55, edgecolor="none",
+               label="market up", zorder=3)
+    ax.scatter(x[down], y[down], s=16, color=t["critical"], alpha=0.65, edgecolor="none",
+               label="market down", zorder=3)
+
+    # The two fitted lines, drawn only over the half each was fitted on.
+    for mask, beta, color in ((~down, regression.beta_up, t["series"]),
+                              (down, regression.beta_down, t["critical"])):
+        grid = np.linspace(x[mask].min(), x[mask].max(), 2)
+        ax.plot(grid, regression.alpha * 100.0 + beta * grid, color=color, lw=2.0, zorder=4)
+
+    ax.axhline(0.0, color=t["axis"], lw=1.0)
+    ax.axvline(0.0, color=t["axis"], lw=1.0)
+    ax.set_xlabel("S&P 500 return over the trade (%)")
+    ax.set_ylabel("strategy P&L (% of notional)")
+    ax.annotate(
+        f"β  down {regression.beta_down:+.3f}   up {regression.beta_up:+.3f}\n"
+        f"R² {regression.r_squared:.3f}  ·  α {regression.alpha_annualized * 100:+.2f}%/yr",
+        xy=(0.03, 0.06),
+        xycoords="axes fraction",
+        color=t["ink"],
+        fontsize=9.5,
+        fontweight="bold",
+    )
+    leg = ax.legend(loc="lower right", frameon=False, fontsize=9)
+    for text in leg.get_texts():
+        text.set_color(t["ink_secondary"])
+    ax.set_title(
+        "Mostly not equity beta — except when it matters",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    _style_axes(ax, t)
+    return ax
+
+
 def plot_vrp_history(measurement, *, theme: str = "light", ax=None):
     """The measured variance risk premium: VIX minus subsequent realized vol.
 

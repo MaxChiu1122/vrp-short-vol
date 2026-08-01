@@ -64,6 +64,8 @@ def hedged_short_option_pnl(
         raise ValueError(
             f"log_returns has length {len(log_returns)}, expected n_steps={n_steps}"
         )
+    if log_returns is None and rng is None:
+        raise ValueError("supply either an rng (to draw a GBM path) or log_returns (a real one)")
 
     # t=0: collect the premium, then buy the initial hedge out of that cash.
     # Both are quoted at sigma_implied -- it is all you can observe.
