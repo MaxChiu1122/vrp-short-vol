@@ -27,15 +27,26 @@ from vrp import (  # noqa: E402
 )
 from vrp import bootstrap_pnl_paths, measure_vrp  # noqa: E402
 from vrp.roll import monthly_roll, regress_on_market  # noqa: E402
+from vrp.sizing import (  # noqa: E402
+    apply_leverage,
+    cvar_budget_leverage,
+    fixed_leverage,
+    growth_optimal_leverage,
+    inverse_implied_leverage,
+    leverage_sweep,
+    vol_target_leverage,
+)
 from vrp.moneyness import TYPICAL_EQUITY_SKEW, moneyness_sweep  # noqa: E402
 from vrp.plot import (  # noqa: E402
     THEMES,
     plot_frequency_sweep,
     plot_moneyness_sweep,
     plot_pnl_distribution,
+    plot_leverage_sweep,
     plot_market_regression,
     plot_return_shape_comparison,
     plot_roll_equity,
+    plot_sizing_rules,
     plot_stress_curve,
     plot_vrp_curve,
     plot_vrp_history,
@@ -172,8 +183,44 @@ def main() -> None:
     print(f"\n  monthly roll: {roll}")
     print(f"  regression  : {reg}")
 
+    # Sizing: the leverage cliff, and rules compared at matched average leverage.
+    lev_grid = (1, 2, 3, 5, 8, 10, 15, 20, 25, 28, 30, 32)
+    sweep_lev = leverage_sweep(roll, lev_grid)
+    kelly = growth_optimal_leverage(roll)
+    print(f"\n  growth-optimal leverage (in-sample): {kelly:.1f}x")
+    print(f"  {'lev':>4} {'CAGR':>9} {'maxDD':>9} {'worst':>8}")
+    for L, sz in sweep_lev:
+        print(f"  {L:>4.0f} {'RUIN' if sz.ruined else f'{sz.cagr*100:+.2f}%':>9} "
+              f"{sz.max_drawdown*100:>8.1f}% {sz.worst_month*100:>7.1f}%")
+
+    MEAN_LEV = 5.0
+    rule_specs = [
+        ("fixed", fixed_leverage(roll, 1.0)),
+        ("vol target", vol_target_leverage(roll, target_vol=0.10)),
+        ("CVaR budget", cvar_budget_leverage(roll, budget=0.10)),
+        ("inverse implied", inverse_implied_leverage(roll)),
+    ]
+    sized = [(name, apply_leverage(roll, lv * (MEAN_LEV / lv.mean()))) for name, lv in rule_specs]
+    print(f"\n  sizing rules at mean leverage {MEAN_LEV:.0f}x")
+    print(f"  {'rule':>16} {'CAGR':>9} {'vol':>7} {'Sharpe':>7} {'maxDD':>9}")
+    for name, sz in sized:
+        print(f"  {name:>16} {sz.cagr*100:>+8.2f}% {sz.vol_annualized*100:>6.1f}% "
+              f"{sz.sharpe_annualized:>7.2f} {sz.max_drawdown*100:>8.1f}%")
+
     for theme in ("light", "dark"):
         surface = THEMES[theme]["surface"]
+
+        axes = plot_leverage_sweep(sweep_lev, growth_optimal=kelly, theme=theme)
+        out = FIGURES / f"leverage_sweep_{theme}.png"
+        axes[0].figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(axes[0].figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
+
+        ax = plot_sizing_rules(sized, theme=theme)
+        out = FIGURES / f"sizing_rules_{theme}.png"
+        ax.figure.savefig(out, dpi=200, bbox_inches="tight", facecolor=surface)
+        plt.close(ax.figure)
+        print(f"  wrote {out.relative_to(FIGURES.parent)}")
 
         axes = plot_roll_equity(roll, theme=theme)
         out = FIGURES / f"roll_equity_{theme}.png"

@@ -7,11 +7,12 @@ rather than a single historical path. Built on the
 [`mcpricer`](https://github.com/MaxChiu1122/Monte-Carlo_option_pricer) C++ pricing/Greeks
 engine — this repo is the strategy/research layer that consumes it.
 
-> **83 pytest tests green**, run on every push against the engine rebuilt from source.
+> **96 pytest tests green**, run on every push against the engine rebuilt from source.
 > Rolled through 36 years of real history the strategy earns **+3.96%/yr at Sharpe 2.05** with a
 > −4.63% max drawdown, and only 15% of that is equity beta. The premium it harvests is measured,
 > not assumed: **+4.10 vol points**, positive on 85.8% of days since 1990. What kills it is not the
-> signal but the sizing — see the leverage table.
+> signal but the sizing: the same Sharpe runs at 4%/yr or into outright ruin depending only on
+> leverage, and the rule that sizes best is the one nobody reaches for first.
 
 ## The idea
 
@@ -351,6 +352,7 @@ src/vrp/
   marketdata.py  # load_market_data / measure_vrp — the premium, measured from VIX
   bootstrap.py   # resample real S&P returns (IID / moving block) into the hedge
   roll.py        # monthly_roll / regress_on_market — the historical track record
+  sizing.py      # leverage rules, compounding, ruin — turning CVaR into a decision
   stats.py       # summarize_pnl — mean / Sharpe / CVaR / win-rate           [harness]
   plot.py        # P&L histogram, VRP curve, stress curve (optional: .[plot])
 scripts/         # make_figures.py, benchmark_backends.py, fetch_market_data.py
@@ -451,6 +453,71 @@ when neutrality is worthless and correlated exactly when it hurts — which is p
 premium for bearing crash risk should look like. You are not being paid for nothing; you are being
 paid for that.
 
+## Sizing: the part that actually kills you
+
+The leverage table above is the whole problem in miniature, and this repo had been computing CVaR
+everywhere without ever using it to decide anything. Sizing closes that.
+
+Everything in this section **compounds on capital** rather than summing at constant notional. That
+distinction is the point: a summed P&L cannot go bankrupt, a compounded one can, and a levered
+short-vol book is precisely the thing that does.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/leverage_sweep_dark.png">
+  <img alt="Two panels against leverage from 1x to 32x. CAGR rises roughly linearly from 4% to 133%. Max drawdown falls from -5% to -99%, crossing -100% total loss at 30x, where a shaded region marks ruin. A dashed line marks full Kelly at 27x." src="docs/leverage_sweep_light.png">
+</picture>
+
+| leverage | CAGR | max drawdown | worst month |
+|---|---|---|---|
+| 1× | +4.0% | −4.6% | −3.5% |
+| 5× | +21.1% | −22.1% | −17.6% |
+| 10× | +44.9% | −42.3% | −35.2% |
+| 20× | +99.3% | −76.7% | −70.5% |
+| 28× | +133.3% | −99.1% | −98.7% |
+| **30×** | **ruin** | **−100%** | −105.7% |
+
+**Sharpe is 2.05 at every single row.** It is scale-free, so it cannot tell you how much to hold —
+which is exactly why a strategy can look identical on paper and still end the fund.
+
+**Full Kelly lands at 27×**, one notch below ruin, with a −99% drawdown. That is not a
+recommendation, it is the standard argument for running a small fraction of it: the growth-optimal
+bet is intolerable, and it's computed in-sample, so the true figure is lower still.
+
+### Which sizing rule?
+
+Four rules, all **trailing-only** (a full-sample calibration would know in 1990 how bad 2008 gets),
+compared at **matched average leverage** so this is about shape rather than one rule simply taking
+more risk:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/sizing_rules_dark.png">
+  <img alt="Log-scale equity curves for four sizing rules from 1990 to 2026, all reaching between 400x and 1100x initial capital. Fixed leverage ends highest; inverse-implied has the shallowest drawdowns." src="docs/sizing_rules_light.png">
+</picture>
+
+| rule | CAGR | vol | Sharpe | max drawdown |
+|---|---|---|---|---|
+| fixed | +21.1% | 9.7% | 2.05 | −22.1% |
+| trailing vol target | +17.7% | 9.7% | 1.74 | −23.3% |
+| trailing CVaR budget | +18.7% | 10.8% | 1.66 | −24.4% |
+| **inverse implied (VIX)** | +18.7% | **7.9%** | **2.24** | **−14.7%** |
+
+Two results here, and the first is uncomfortable.
+
+**Trailing-statistic sizing makes things worse than doing nothing.** Both the vol target and the
+CVaR budget deliver *lower* Sharpe and *deeper* drawdowns than flat leverage. The reason is
+mechanical: they estimate risk from the recent past, so they lever up after calm stretches — which
+is precisely when a short-vol book is about to be hit. Sizing off a backward-looking estimate of a
+forward-looking risk is worse than not adapting at all.
+
+**Sizing off implied vol wins.** Scaling inversely with the VIX quoted *on the trade date* — known
+information, not look-ahead — lifts Sharpe to 2.24 and cuts the maximum drawdown by a third, from
+−22.1% to −14.7%. VIX is the market's forecast of the coming month; trailing realized vol is a
+description of the last one. For a risk that arrives suddenly, the forecast wins.
+
+And hindsight is worth less than you'd guess: calibrating leverage on the full sample (cheating)
+returns Sharpe 2.05 against the honest trailing rule's 1.74 — real, but not the difference between
+a strategy and a mirage.
+
 ## Limitations, and what would come next
 
 Three places this is deliberately a model rather than a measurement, each flagged where it
@@ -463,10 +530,10 @@ appears above:
   — there the vol is whatever happened).
 - **VIX stands in for an ATM implied vol** in the roll. It prints above the option actually sold, so
   the results carry a haircut sweep rather than a single number.
-- **There is no capital base.** P&L is a fraction of notional; there is no margin model and no
-  sizing rule, which the leverage table above shows is the decisive missing piece.
+- **There is no margin model.** Sizing is expressed as leverage on notional; a real book faces
+  margin calls that force deleveraging at the worst moment, which would make the levered drawdowns
+  above optimistic rather than pessimistic.
 
-Two next steps, in order. **Sizing** — turn the CVaR this repo computes everywhere into a position
-rule, since the leverage table shows that is what separates a 4%/yr curiosity from a blow-up. Then
-an **option-chain history** (OptionMetrics, CBOE DataShop, ORATS) to replace the VIX proxy and the
-flat-vol assumption with what was actually quoted and tradeable.
+The next step is an **option-chain history** (OptionMetrics, CBOE DataShop, ORATS): it replaces the
+VIX proxy, the flat-vol assumption and the caricatured skew in one move, with what was actually
+quoted and actually tradeable.

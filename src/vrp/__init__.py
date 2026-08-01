@@ -25,6 +25,16 @@ from .moneyness import (
     strike_for_delta,
 )
 from .roll import MarketRegression, RollResult, monthly_roll, regress_on_market
+from .sizing import (
+    SizedResult,
+    apply_leverage,
+    cvar_budget_leverage,
+    fixed_leverage,
+    growth_optimal_leverage,
+    inverse_implied_leverage,
+    leverage_sweep,
+    vol_target_leverage,
+)
 from .stress import HestonParams, heston_pnl_paths
 
 __all__ = [
@@ -47,6 +57,14 @@ __all__ = [
     "regress_on_market",
     "RollResult",
     "MarketRegression",
+    "apply_leverage",
+    "leverage_sweep",
+    "fixed_leverage",
+    "vol_target_leverage",
+    "cvar_budget_leverage",
+    "inverse_implied_leverage",
+    "growth_optimal_leverage",
+    "SizedResult",
     "HestonParams",
     "heston_pnl_paths",
     "BACKENDS",

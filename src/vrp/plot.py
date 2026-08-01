@@ -237,6 +237,153 @@ def plot_frequency_sweep(sweep, *, steps_per_day: float, theme: str = "light", a
     return axes
 
 
+# Four categorical slots, for comparing sizing rules. In light mode the aqua and
+# yellow steps sit below 3:1 against the surface, so these charts carry direct
+# end-of-line labels (and the README a table) rather than relying on the legend.
+RULE_COLORS = {
+    "light": ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"],
+    "dark": ["#3987e5", "#d95926", "#199e70", "#c98500"],
+}
+
+
+def plot_leverage_sweep(sweep, *, growth_optimal=None, theme: str = "light", axes=None):
+    """Growth and drawdown against fixed leverage -- where the cliff is.
+
+    ``sweep`` is the ``(leverage, SizedResult)`` list from ``vrp.sizing.leverage_sweep``.
+    Sharpe is scale-invariant, so it is flat across the whole range and tells you
+    nothing; growth and drawdown are what actually move, in opposite directions,
+    until a single month is large enough to end the book.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    lev = np.array([x for x, _s in sweep], dtype=float)
+    alive = np.array([not s.ruined for _x, s in sweep])
+    cagr = np.array([s.cagr * 100 if not s.ruined else np.nan for _x, s in sweep])
+    dd = np.array([s.max_drawdown * 100 for _x, s in sweep])
+
+    if axes is None:
+        fig, axes = plt.subplots(2, 1, figsize=(7.5, 5.8), sharex=True)
+        fig.patch.set_facecolor(t["surface"])
+    ax_cagr, ax_dd = axes
+
+    ax_cagr.plot(lev[alive], cagr[alive], "-o", color=t["series"], lw=2.0, ms=5.0, zorder=3)
+    ax_cagr.set_ylabel("CAGR (%)")
+
+    ax_dd.plot(lev, dd, "-o", color=t["critical"], lw=2.0, ms=5.0, zorder=3)
+    ax_dd.axhline(-100.0, color=t["critical"], lw=1.2, ls=(0, (2, 2)))
+    ax_dd.annotate("total loss", xy=(lev.min(), -100), xytext=(4, 4),
+                   textcoords="offset points", color=t["critical"], fontsize=9, fontweight="bold")
+    ax_dd.set_ylabel("max drawdown (%)")
+    ax_dd.set_xlabel("leverage (x notional per unit of capital)")
+
+    if growth_optimal is not None:
+        for ax in (ax_cagr, ax_dd):
+            ax.axvline(growth_optimal, color=t["ink"], lw=1.5, ls=(0, (4, 2)), zorder=4)
+        ax_cagr.annotate(
+            f"full Kelly {growth_optimal:.0f}x\n(in-sample)",
+            xy=(growth_optimal, np.nanmin(cagr)),
+            xytext=(-8, 6),
+            textcoords="offset points",
+            color=t["ink"],
+            fontsize=9,
+            fontweight="bold",
+            ha="right",
+        )
+
+    ruined = lev[~alive]
+    if ruined.size:
+        for ax in (ax_cagr, ax_dd):
+            ax.axvspan(ruined.min(), lev.max(), color=t["critical"], alpha=0.10, zorder=0)
+        ax_dd.annotate(
+            f"ruin at {ruined.min():.0f}x",
+            xy=(ruined.min(), -50),
+            xytext=(6, 0),
+            textcoords="offset points",
+            color=t["critical"],
+            fontsize=9,
+            fontweight="bold",
+        )
+
+    for ax in (ax_cagr, ax_dd):
+        _style_axes(ax, t)
+    ax_cagr.set_title(
+        "The signal is the easy part",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    return axes
+
+
+def plot_sizing_rules(results, *, theme: str = "light", ax=None):
+    """Equity curves of competing sizing rules, matched on average leverage.
+
+    ``results`` is a list of ``(label, SizedResult)``. Log scale, because compounded
+    equity over 36 years spans orders of magnitude and a linear axis would show only
+    the last few years. Lines are labelled at their right-hand end: two of the light
+    steps sit below 3:1 on the surface, so identity never rests on colour alone.
+    """
+    import matplotlib.pyplot as plt
+
+    t = THEMES[theme]
+    colors = RULE_COLORS[theme]
+    if len(results) > len(colors):
+        raise ValueError(f"at most {len(colors)} rules, got {len(results)}")
+
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(8.5, 5.0))
+        fig.patch.set_facecolor(t["surface"])
+
+    for (label, sized), color in zip(results, colors):
+        x = sized.dates.astype("datetime64[D]").astype(object)
+        ax.plot(x, sized.equity, color=color, lw=2.0, zorder=3)
+
+    # Direct labels at the right-hand end, nudged apart where terminal equities are
+    # close enough that the text would overlap. Curves that finish within a few
+    # percent of each other are common here, and a collision makes the label
+    # useless exactly where identity matters most.
+    ends = sorted(
+        ((np.log10(max(s.equity[-1], 1e-9)), lbl, s, c) for (lbl, s), c in zip(results, colors)),
+        key=lambda row: row[0],
+    )
+    min_gap = 0.085  # in log10 units of equity
+    placed: list[float] = []
+    for y, _lbl, _s, _c in ends:
+        if placed and y - placed[-1] < min_gap:
+            y = placed[-1] + min_gap
+        placed.append(y)
+
+    last_x = results[0][1].dates.astype("datetime64[D]").astype(object)[-1]
+    for (y_raw, label, sized, color), y in zip(ends, placed):
+        ax.annotate(
+            f"  {label}  (DD {sized.max_drawdown * 100:.0f}%)",
+            xy=(last_x, 10.0**y),
+            xytext=(6, 0),
+            textcoords="offset points",
+            color=color,
+            fontsize=9,
+            fontweight="bold",
+            va="center",
+        )
+
+    ax.set_yscale("log")
+    ax.set_ylabel("equity (x initial capital, log)")
+    ax.margins(x=0.22)
+    ax.set_title(
+        "Same average leverage, different rules",
+        color=t["ink"],
+        fontsize=12,
+        fontweight="bold",
+        loc="left",
+        pad=12,
+    )
+    _style_axes(ax, t)
+    return ax
+
+
 def plot_roll_equity(roll, *, theme: str = "light", axes=None):
     """Cumulative P&L of the historical monthly roll, with its drawdown beneath.
 
